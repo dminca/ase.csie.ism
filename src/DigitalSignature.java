@@ -1,11 +1,17 @@
 import java.io.FileInputStream;
+import java.security.Key;
 import java.security.KeyStore;
 import java.security.MessageDigest;
+import java.security.PrivateKey;
 import java.security.PublicKey;
+import java.security.Signature;
 import java.security.cert.X509Certificate;
 
 import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
+
 import sun.misc.BASE64Encoder;
+import sun.misc.BASE64Decoder;
 
 public class DigitalSignature {
 
@@ -37,12 +43,97 @@ public class DigitalSignature {
 			recvcert = (X509Certificate)ks.getCertificate("recev");
 			//2.3 get out the public key from the certificate
 			PublicKey pubKeyReceiver = recvcert.getPublicKey();
+			//2.4 encrypt the secretkey with the receiver's public key
+			byte[] byteEncryptWithPublicKey = encryptUtil.encryptData
+					(senderSecretKey.getEncoded(),pubKeyReceiver, 
+						"RSA/ECB/PKCS1Padding");
+			String strSentByteEncryptWithPublicKey =
+					new BASE64Encoder().encode(byteEncryptWithPublicKey);
+			
+			//3. create a message digest of the data to be transmitted
+			md.update(byteDataToTransmit);
+			byte byteMDofDataToTransmit[] = md.digest();
+			String strMDofDataToTransmit = new String();
+			for(int i=0; i<byteMDofDataToTransmit.length;i++)
+			{
+				strMDofDataToTransmit +=
+					Integer.toHexString((int)byteMDofDataToTransmit[i] & 0xFF);	
+			}
+			//3.1 message to be signed = encrypted secret key + 
+			//MAC of the data to be transmitted
+			String strMsgToSign = strSentByteEncryptWithPublicKey + "|"
+					+strMDofDataToTransmit;
+			//4 sign the message
+			//4.1 get the private key from the keystore
+			char[] keypassword = "test1234".toCharArray();
+			Key mykey = ks.getKey("sender", keypassword);
+			PrivateKey myPrivateKey = (PrivateKey)mykey;
+			
+			//4.2 sign the message
+			Signature mySign = Signature.getInstance("MD5withRSA");
+			mySign.initSign(myPrivateKey);
+			mySign.update(strMsgToSign.getBytes());
+			byte[] byteSignedData = mySign.sign();
+			
+			//5. validate the signature
+			//5.1 extract the sender's public key
+			X509Certificate senderCert;
+			senderCert = (X509Certificate)ks.getCertificate("sender");
+			PublicKey pubKeySender = senderCert.getPublicKey();
+			//5.2 verify the signature
+			Signature myVerifySign = Signature.getInstance("MD5withRSA");
+			myVerifySign.initVerify(pubKeySender);
+			myVerifySign.update(strMsgToSign.getBytes());
+			boolean verifySign = myVerifySign.verify(byteSignedData);
+			if(verifySign == false)
+				System.out.println("Error in signature verification");
+			else
+				System.out.println("Signature successfully verified");
+			//6 decrypt the message with the receiver's private key
+			char[] recvpassword = "test1234".toCharArray();
+			Key recvkey = ks.getKey("recev", recvpassword);
+			PrivateKey recvPrivateKey = (PrivateKey)recvkey;
+			//6.1 parse the messagedigest and the encrypted symmetric key
+			String strRecvSignedData = new String(byteSignedData);
+			String[] strRecvSignedDataArray = new String[10];
+			strRecvSignedDataArray = strMsgToSign.split("|");
+			int position = strMsgToSign.indexOf("|");
+			String strEncryptWithPublicKey = strMsgToSign.substring(0,position);
+			String strHashOfData = strMsgToSign.substring(position+1);
+			
+			//6.2 decrypt to get the symmetric key
+			byte[] byteStrEncryptWithPublicKey = 
+					new BASE64Decoder().decodeBuffer(strEncryptWithPublicKey);
+			byte[] byteDecyptWithPrivateKey = 
+					encryptUtil.decryptData(byteEncryptWithPublicKey, 
+							recvPrivateKey, "RSA/ECB/PKCS1Padding");
+			//7. decrypt the data using the symmetric key
+			SecretKeySpec secretKeySpecDecrypted = 
+				new SecretKeySpec(byteDecyptWithPrivateKey, "AES");
+			byte[] byteDecryptText = encryptUtil.decryptData(byteCipherText,
+					secretKeySpecDecrypted, "AES");
+			String strDecyptedText = new String(byteDecryptText);
+			System.out.println("Decrypted data is: " + strDecyptedText);
+			
+			//8. compute the messageDigest of data + signed message
+			MessageDigest recvmd = MessageDigest.getInstance("MD5");
+			recvmd.update(byteDecryptText);
+			byte byteHashofRecvSignedData[] = recvmd.digest();
+			String strHashOfRecvSignedData = new String();
+			for(int i=0; i<byteHashofRecvSignedData.length;i++)
+			{
+				strHashOfRecvSignedData +=
+					Integer.toHexString((int)
+					byteHashofRecvSignedData[i] & 0xFF);	
+			}
+			if(!strHashOfRecvSignedData.equals(strHashOfData))
+				System.out.println("Message has been tampered");
+			
 		}
 		catch (Exception e) {
 			// TODO: handle exception
+			System.out.println("Exception caught: " + e);
+			e.printStackTrace();
 		}
-		
-		
 	}
-
 }
